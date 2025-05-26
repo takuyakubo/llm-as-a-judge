@@ -68,7 +68,7 @@ class Criteria:
             ]
             criterion = Criterion(
                 name=criterion_data["name"],
-                description=criterion_data["description"],
+                description=criterion_data.get("description", ""),  # Default to empty string
                 levels=levels
             )
             criteria.append(criterion)
