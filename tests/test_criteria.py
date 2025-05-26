@@ -13,7 +13,7 @@ class TestCriteria(unittest.TestCase):
         )
         
         # rubric.jsonからテストデータを読み込む
-        with open("notebooks/rubric.json", "r") as f:
+        with open("tests/rubric.json", "r") as f:
             self.rubric_data = json.load(f)
 
     def test_level_creation(self):
