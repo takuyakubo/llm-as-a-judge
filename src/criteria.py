@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 import xml.etree.ElementTree as ET
+import json
 
 class Level(BaseModel):
     score: int
@@ -35,4 +36,42 @@ class Criteria:
                 level_element.text = level.rule
         
         return ET.tostring(root, encoding='unicode')
+
+    def to_json(self) -> str:
+        data = {
+            "criteria": [
+                {
+                    "name": criterion.name,
+                    "description": criterion.description,
+                    "levels": [
+                        {
+                            "score": level.score,
+                            "rule": level.rule
+                        }
+                        for level in criterion.levels
+                    ]
+                }
+                for criterion in self.criteria
+            ]
+        }
+        return json.dumps(data, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> 'Criteria':
+        data = json.loads(json_str)
+        criteria = cls()
+        
+        for criterion_data in data.get("criteria", []):
+            levels = [
+                Level(score=level_data["score"], rule=level_data["rule"])
+                for level_data in criterion_data.get("levels", [])
+            ]
+            criterion = Criterion(
+                name=criterion_data["name"],
+                description=criterion_data["description"],
+                levels=levels
+            )
+            criteria.append(criterion)
+        
+        return criteria
 
