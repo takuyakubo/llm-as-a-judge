@@ -107,10 +107,6 @@ python -m unittest tests.test_criteria
 python -m unittest discover tests -v
 ```
 
-## Contributing
-
-Please see [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and contribution instructions.
-
 ## API Documentation
 
 For detailed API documentation and usage examples, see [API.md](API.md).
@@ -123,10 +119,6 @@ For detailed API documentation and usage examples, see [API.md](API.md).
 - [ ] CLI interface
 - [ ] Evaluation calibration features
 - [ ] Multi-evaluator consensus mechanisms
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Acknowledgments
 
