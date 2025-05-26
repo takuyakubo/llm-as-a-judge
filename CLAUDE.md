@@ -73,3 +73,5 @@ The system loads evaluation criteria from JSON format (like `rubric.json`) and c
 - The current implementation focuses on data modeling and export; evaluation logic is not yet implemented
 - Japanese language is used in test data and rubric definitions
 - XML export uses Python's built-in `xml.etree.ElementTree` module for reliable XML generation
+- When finishing a task or asking something to the user, i.e. when stopping the task by some reasons, use slack to notify the user
+- When using slack mcp, always use `<@U27SREZ3R>` to notify the user
