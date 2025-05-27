@@ -93,8 +93,11 @@ class TestEvaluator(unittest.TestCase):
             else:
                 return "スコア: 4\n理由: 論理的に一貫している\n確信度: 0.8"
         
+        # Create evaluator with custom LLM function
+        evaluator_with_llm = Evaluator(self.criteria, llm_function=mock_llm)
+        
         document = "これは優れた文書です。"
-        result = self.evaluator.evaluate_document(document, llm_function=mock_llm)
+        result = evaluator_with_llm.evaluate_document(document)
         
         self.assertEqual(len(result.scores), 2)
         self.assertEqual(result.model_used, "custom_llm")
