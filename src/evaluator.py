@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 from datetime import datetime
 from pydantic import BaseModel
 from .criteria import Criteria, Criterion
@@ -37,8 +37,9 @@ class EvaluationResult(BaseModel):
 
 
 class Evaluator:
-    def __init__(self, criteria: Criteria):
+    def __init__(self, criteria: Criteria, llm_function: Optional[Callable[[str], str]] = None):
         self.criteria = criteria
+        self.llm_function = llm_function
     
     def generate_prompt(self, document: str, criterion: Criterion) -> str:
         """Generate evaluation prompt for a specific criterion"""
@@ -101,30 +102,45 @@ class Evaluator:
             confidence=confidence
         )
     
-    def evaluate_document(self, document: str, llm_function=None) -> EvaluationResult:
-        """Evaluate a document using all criteria"""
+    def evaluate_document(self, document: str, return_dict: bool = False) -> Dict[str, int] | EvaluationResult:
+        """Evaluate a document using all criteria
+        
+        Args:
+            document: The document to evaluate
+            return_dict: If True, return simple dict with criterion_name: score mapping
+                       If False, return full EvaluationResult object
+        
+        Returns:
+            Dictionary mapping criterion names to scores, or EvaluationResult object
+        """
+        llm_function = self.llm_function
         if llm_function is None:
             # For testing purposes, return mock results
-            return self._mock_evaluate(document)
+            result = self._mock_evaluate(document)
+        else:
+            scores = []
+            for criterion in self.criteria.criteria:
+                prompt = self.generate_prompt(document, criterion)
+                response = llm_function(prompt)
+                score = self.parse_llm_response(response, criterion.name)
+                scores.append(score)
+            
+            # Calculate overall score (weighted average based on confidence)
+            total_weighted_score = sum(s.score * s.confidence for s in scores)
+            total_confidence = sum(s.confidence for s in scores)
+            overall_score = total_weighted_score / total_confidence if total_confidence > 0 else 0
+            
+            result = EvaluationResult(
+                timestamp=datetime.now(),
+                scores=scores,
+                overall_score=overall_score,
+                model_used="custom_llm"
+            )
         
-        scores = []
-        for criterion in self.criteria.criteria:
-            prompt = self.generate_prompt(document, criterion)
-            response = llm_function(prompt)
-            score = self.parse_llm_response(response, criterion.name)
-            scores.append(score)
-        
-        # Calculate overall score (weighted average based on confidence)
-        total_weighted_score = sum(s.score * s.confidence for s in scores)
-        total_confidence = sum(s.confidence for s in scores)
-        overall_score = total_weighted_score / total_confidence if total_confidence > 0 else 0
-        
-        return EvaluationResult(
-            timestamp=datetime.now(),
-            scores=scores,
-            overall_score=overall_score,
-            model_used="custom_llm"
-        )
+        if return_dict:
+            # Return simple dict for backward compatibility
+            return {score.criterion_name: score.score for score in result.scores}
+        return result
     
     def _mock_evaluate(self, document: str) -> EvaluationResult:
         """Mock evaluation for testing"""

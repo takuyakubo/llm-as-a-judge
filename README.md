@@ -28,6 +28,9 @@ source venv/bin/activate  # On macOS/Linux
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Install the CLI tool (optional)
+pip install -e .
 ```
 
 ## Quick Start
@@ -92,6 +95,40 @@ llm-as-a-judge/
 └── CLAUDE.md           # Development guidelines
 ```
 
+## Command Line Interface
+
+After installing with `pip install -e .`, you can use the `llm-judge` command:
+
+### Evaluate a Document
+
+```bash
+# Evaluate a document from file
+llm-judge evaluate tests/rubric.json -f document.txt
+
+# Evaluate from stdin
+echo "Your document text here" | llm-judge evaluate tests/rubric.json
+
+# Output as JSON
+llm-judge evaluate tests/rubric.json -f document.txt -o json
+```
+
+### Export Criteria
+
+```bash
+# Export criteria to XML (stdout)
+llm-judge export tests/rubric.json
+
+# Export to file
+llm-judge export tests/rubric.json -o criteria.xml
+```
+
+### Show Criteria
+
+```bash
+# Display criteria in human-readable format
+llm-judge show tests/rubric.json
+```
+
 ## Testing
 
 Run the test suite:
@@ -113,10 +150,10 @@ For detailed API documentation and usage examples, see [API.md](API.md).
 
 ## Future Enhancements
 
+- [x] CLI interface
 - [ ] Real LLM API integration (OpenAI, Anthropic)
 - [ ] Batch evaluation for multiple documents
 - [ ] Evaluation result export (JSON/CSV)
-- [ ] CLI interface
 - [ ] Evaluation calibration features
 - [ ] Multi-evaluator consensus mechanisms
 
