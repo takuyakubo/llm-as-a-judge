@@ -1,7 +1,9 @@
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Union
 from datetime import datetime
+import asyncio
 from pydantic import BaseModel
 from .criteria import Criteria, Criterion
+from .llm_providers import LLMProvider, create_llm_provider, LLMConfig
 
 
 class CriterionScore(BaseModel):
@@ -37,9 +39,19 @@ class EvaluationResult(BaseModel):
 
 
 class Evaluator:
-    def __init__(self, criteria: Criteria, llm_function: Optional[Callable[[str], str]] = None):
+    def __init__(
+        self, 
+        criteria: Criteria, 
+        llm_function: Optional[Callable[[str], str]] = None,
+        llm_provider: Optional[LLMProvider] = None,
+        llm_config: Optional[Union[LLMConfig, Dict]] = None
+    ):
         self.criteria = criteria
         self.llm_function = llm_function
+        self.llm_provider = llm_provider
+        
+        # Only create default provider if explicitly requested
+        # (keep None for mock mode compatibility)
     
     def generate_prompt(self, document: str, criterion: Criterion) -> str:
         """Generate evaluation prompt for a specific criterion"""
@@ -102,26 +114,57 @@ class Evaluator:
             confidence=confidence
         )
     
-    def evaluate_document(self, document: str, return_dict: bool = False) -> Dict[str, int] | EvaluationResult:
+    def evaluate_document(self, document: str, return_dict: bool = False, document_id: Optional[str] = None) -> Union[Dict[str, int], EvaluationResult]:
         """Evaluate a document using all criteria
         
         Args:
             document: The document to evaluate
             return_dict: If True, return simple dict with criterion_name: score mapping
                        If False, return full EvaluationResult object
+            document_id: Optional identifier for the document
         
         Returns:
             Dictionary mapping criterion names to scores, or EvaluationResult object
         """
+        # Try to use async method if available
+        if self.llm_provider and asyncio.iscoroutinefunction(self.llm_provider.generate):
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If we're already in an async context, use sync version
+                    return self._evaluate_sync(document, return_dict, document_id)
+                else:
+                    # Otherwise, run the async version
+                    return loop.run_until_complete(self.evaluate_document_async(document, return_dict, document_id))
+            except RuntimeError:
+                # Fallback to sync version if async fails
+                return self._evaluate_sync(document, return_dict, document_id)
+        else:
+            return self._evaluate_sync(document, return_dict, document_id)
+    
+    def _evaluate_sync(self, document: str, return_dict: bool = False, document_id: Optional[str] = None) -> Union[Dict[str, int], EvaluationResult]:
+        """Synchronous evaluation"""
         llm_function = self.llm_function
-        if llm_function is None:
+        
+        if llm_function is None and self.llm_provider is None:
             # For testing purposes, return mock results
             result = self._mock_evaluate(document)
         else:
             scores = []
+            model_used = None
+            
             for criterion in self.criteria.criteria:
                 prompt = self.generate_prompt(document, criterion)
-                response = llm_function(prompt)
+                
+                if llm_function:
+                    response = llm_function(prompt)
+                    model_used = "custom_llm"
+                elif self.llm_provider:
+                    response = self.llm_provider.generate_sync(prompt)
+                    model_used = getattr(self.llm_provider.config, 'model_name', 'unknown')
+                else:
+                    raise ValueError("No LLM function or provider available")
+                
                 score = self.parse_llm_response(response, criterion.name)
                 scores.append(score)
             
@@ -131,14 +174,54 @@ class Evaluator:
             overall_score = total_weighted_score / total_confidence if total_confidence > 0 else 0
             
             result = EvaluationResult(
+                document_id=document_id,
                 timestamp=datetime.now(),
                 scores=scores,
                 overall_score=overall_score,
-                model_used="custom_llm"
+                model_used=model_used
             )
         
         if return_dict:
             # Return simple dict for backward compatibility
+            return {score.criterion_name: score.score for score in result.scores}
+        return result
+    
+    async def evaluate_document_async(self, document: str, return_dict: bool = False, document_id: Optional[str] = None) -> Union[Dict[str, int], EvaluationResult]:
+        """Asynchronous evaluation for better performance"""
+        if not self.llm_provider:
+            # Fallback to sync if no provider
+            return self._evaluate_sync(document, return_dict, document_id)
+        
+        scores = []
+        model_used = getattr(self.llm_provider.config, 'model_name', 'unknown')
+        
+        # Create all prompts
+        prompts = [(criterion, self.generate_prompt(document, criterion)) 
+                   for criterion in self.criteria.criteria]
+        
+        # Evaluate all criteria concurrently
+        tasks = [self.llm_provider.generate(prompt) for _, prompt in prompts]
+        responses = await asyncio.gather(*tasks)
+        
+        # Parse all responses
+        for (criterion, _), response in zip(prompts, responses):
+            score = self.parse_llm_response(response, criterion.name)
+            scores.append(score)
+        
+        # Calculate overall score
+        total_weighted_score = sum(s.score * s.confidence for s in scores)
+        total_confidence = sum(s.confidence for s in scores)
+        overall_score = total_weighted_score / total_confidence if total_confidence > 0 else 0
+        
+        result = EvaluationResult(
+            document_id=document_id,
+            timestamp=datetime.now(),
+            scores=scores,
+            overall_score=overall_score,
+            model_used=model_used
+        )
+        
+        if return_dict:
             return {score.criterion_name: score.score for score in result.scores}
         return result
     

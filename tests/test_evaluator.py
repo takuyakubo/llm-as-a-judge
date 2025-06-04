@@ -71,8 +71,11 @@ class TestEvaluator(unittest.TestCase):
     
     def test_mock_evaluate(self):
         """Test mock evaluation"""
+        # Create evaluator without LLM provider to force mock mode
+        mock_evaluator = Evaluator(self.criteria, llm_function=None, llm_provider=None)
+        
         document = "これはテスト文書です。"
-        result = self.evaluator.evaluate_document(document)
+        result = mock_evaluator.evaluate_document(document)
         
         self.assertIsInstance(result, EvaluationResult)
         self.assertEqual(len(result.scores), 2)  # We have 2 criteria
