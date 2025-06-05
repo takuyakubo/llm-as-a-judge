@@ -1,6 +1,8 @@
 from typing import Dict, List, Optional, Callable, Union
 from datetime import datetime
 import asyncio
+import csv
+import io
 from pydantic import BaseModel
 from .criteria import Criteria, Criterion
 from .llm_providers import LLMProvider, create_llm_provider, LLMConfig
@@ -36,6 +38,44 @@ class EvaluationResult(BaseModel):
             "overall_score": self.overall_score,
             "model_used": self.model_used
         }
+    
+    def to_csv(self, include_reasoning: bool = True) -> str:
+        """Convert evaluation result to CSV format.
+        
+        Args:
+            include_reasoning: Whether to include reasoning column
+            
+        Returns:
+            CSV string with evaluation results
+        """
+        output = io.StringIO()
+        
+        # Define headers
+        headers = ['document_id', 'timestamp', 'model_used', 'criterion_name', 
+                   'score', 'confidence']
+        if include_reasoning:
+            headers.append('reasoning')
+        headers.append('overall_score')
+        
+        writer = csv.DictWriter(output, fieldnames=headers)
+        writer.writeheader()
+        
+        # Write row for each criterion score
+        for score in self.scores:
+            row = {
+                'document_id': self.document_id or '',
+                'timestamp': self.timestamp.isoformat(),
+                'model_used': self.model_used or '',
+                'criterion_name': score.criterion_name,
+                'score': score.score,
+                'confidence': score.confidence,
+                'overall_score': f"{self.overall_score:.2f}"
+            }
+            if include_reasoning:
+                row['reasoning'] = score.reasoning
+            writer.writerow(row)
+        
+        return output.getvalue()
 
 
 class Evaluator:
@@ -148,7 +188,7 @@ class Evaluator:
         
         if llm_function is None and self.llm_provider is None:
             # For testing purposes, return mock results
-            result = self._mock_evaluate(document)
+            result = self._mock_evaluate(document, document_id)
         else:
             scores = []
             model_used = None
@@ -225,7 +265,7 @@ class Evaluator:
             return {score.criterion_name: score.score for score in result.scores}
         return result
     
-    def _mock_evaluate(self, document: str) -> EvaluationResult:
+    def _mock_evaluate(self, document: str, document_id: Optional[str] = None) -> EvaluationResult:
         """Mock evaluation for testing"""
         scores = []
         for criterion in self.criteria.criteria:
@@ -237,6 +277,7 @@ class Evaluator:
             ))
         
         return EvaluationResult(
+            document_id=document_id,
             timestamp=datetime.now(),
             scores=scores,
             overall_score=3.0,

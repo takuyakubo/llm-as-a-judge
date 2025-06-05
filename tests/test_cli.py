@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+import csv
 from unittest.mock import patch, MagicMock
 from io import StringIO
 
@@ -69,6 +70,12 @@ class TestCLI(unittest.TestCase):
             args.rubric = self.rubric_file.name
             args.file = doc_file
             args.output_format = 'json'
+            args.mock = True
+            args.verbose = False
+            args.provider = 'pydantic_ai'
+            args.model = None
+            args.temperature = 0.3
+            args.max_tokens = None
             
             # Capture output
             with patch('sys.stdout', new=StringIO()) as fake_out:
@@ -78,8 +85,9 @@ class TestCLI(unittest.TestCase):
             # Check result
             self.assertEqual(result, 0)
             parsed_output = json.loads(output)
-            self.assertIn('clarity', parsed_output)
-            self.assertIn('accuracy', parsed_output)
+            self.assertIn('document_id', parsed_output)
+            self.assertIn('scores', parsed_output)
+            self.assertIn('overall_score', parsed_output)
             
         finally:
             os.unlink(doc_file)
@@ -90,6 +98,12 @@ class TestCLI(unittest.TestCase):
         args.rubric = self.rubric_file.name
         args.file = None
         args.output_format = 'pretty'
+        args.mock = True
+        args.verbose = False
+        args.provider = 'pydantic_ai'
+        args.model = None
+        args.temperature = 0.3
+        args.max_tokens = None
         
         # Mock stdin
         test_input = "This is a test document from stdin."
@@ -103,15 +117,80 @@ class TestCLI(unittest.TestCase):
         self.assertIn("Evaluation Results:", output)
         self.assertIn("clarity:", output)
         self.assertIn("accuracy:", output)
-        self.assertIn("Total Score:", output)
-        self.assertIn("Average:", output)
+        self.assertIn("Overall Score:", output)
         
+    def test_evaluate_document_csv_output(self):
+        """Test evaluating document with CSV output format."""
+        # Create test document
+        with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+            f.write("This is a test document for CSV evaluation.")
+            doc_file = f.name
+            
+        try:
+            # Test with reasoning included
+            args = MagicMock()
+            args.rubric = self.rubric_file.name
+            args.file = doc_file
+            args.output_format = 'csv'
+            args.mock = True
+            args.verbose = True  # Include reasoning
+            args.provider = 'pydantic_ai'
+            args.model = None
+            args.temperature = 0.3
+            args.max_tokens = None
+            
+            # Capture output
+            with patch('sys.stdout', new=StringIO()) as fake_out:
+                result = evaluate_document(args)
+                output = fake_out.getvalue()
+                
+            # Check result
+            self.assertEqual(result, 0)
+            
+            # Parse CSV output
+            reader = csv.DictReader(StringIO(output))
+            rows = list(reader)
+            
+            # Should have 2 rows (one per criterion)
+            self.assertEqual(len(rows), 2)
+            
+            # Check headers
+            expected_headers = {'document_id', 'timestamp', 'model_used', 
+                              'criterion_name', 'score', 'confidence', 
+                              'reasoning', 'overall_score'}
+            self.assertEqual(set(reader.fieldnames), expected_headers)
+            
+            # Check content
+            self.assertEqual(rows[0]['document_id'], doc_file)
+            self.assertIn(rows[0]['criterion_name'], ['clarity', 'accuracy'])
+            self.assertEqual(rows[0]['score'], '3')  # Mock returns 3
+            self.assertEqual(rows[0]['confidence'], '0.7')  # Mock returns 0.7
+            
+            # Test without reasoning
+            args.verbose = False
+            with patch('sys.stdout', new=StringIO()) as fake_out:
+                result = evaluate_document(args)
+                output = fake_out.getvalue()
+                
+            reader = csv.DictReader(StringIO(output))
+            rows = list(reader)
+            self.assertNotIn('reasoning', reader.fieldnames)
+            
+        finally:
+            os.unlink(doc_file)
+    
     def test_evaluate_empty_document(self):
         """Test evaluating empty document."""
         args = MagicMock()
         args.rubric = self.rubric_file.name
         args.file = None
         args.output_format = 'json'
+        args.mock = True
+        args.verbose = False
+        args.provider = 'pydantic_ai'
+        args.model = None
+        args.temperature = 0.3
+        args.max_tokens = None
         
         # Mock empty stdin
         with patch('sys.stdin', StringIO("")):
@@ -194,7 +273,8 @@ class TestCLI(unittest.TestCase):
                 'evaluate',
                 self.rubric_file.name,
                 '-f', doc_file,
-                '-o', 'json'
+                '-o', 'json',
+                '-m'  # mock mode
             ]
             
             with patch('sys.argv', test_args):
@@ -204,6 +284,43 @@ class TestCLI(unittest.TestCase):
                         
             # Check that exit was called with 0
             mock_exit.assert_called_once_with(0)
+            
+        finally:
+            os.unlink(doc_file)
+            
+    def test_main_evaluate_csv_command(self):
+        """Test main function with evaluate command and CSV output."""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+            f.write("Test document for CSV")
+            doc_file = f.name
+            
+        try:
+            test_args = [
+                'llm-judge',
+                'evaluate',
+                self.rubric_file.name,
+                '-f', doc_file,
+                '-o', 'csv',
+                '-m',  # mock mode
+                '-v'   # verbose (include reasoning)
+            ]
+            
+            with patch('sys.argv', test_args):
+                with patch('sys.stdout', new=StringIO()) as fake_out:
+                    with patch('sys.exit') as mock_exit:
+                        main()
+                        output = fake_out.getvalue()
+                        
+            # Check that exit was called with 0
+            mock_exit.assert_called_once_with(0)
+            
+            # Verify CSV output
+            reader = csv.DictReader(StringIO(output))
+            rows = list(reader)
+            self.assertGreater(len(rows), 0)
+            self.assertIn('criterion_name', reader.fieldnames)
+            self.assertIn('score', reader.fieldnames)
+            self.assertIn('reasoning', reader.fieldnames)  # Should include reasoning with -v
             
         finally:
             os.unlink(doc_file)

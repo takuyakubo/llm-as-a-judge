@@ -76,6 +76,10 @@ def evaluate_document(args):
         if args.output_format == 'json':
             # Full result with all details
             print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        elif args.output_format == 'csv':
+            # CSV format output
+            include_reasoning = args.verbose
+            print(result.to_csv(include_reasoning=include_reasoning), end='')
         else:  # pretty format
             print("Evaluation Results:")
             print("-" * 40)
@@ -157,7 +161,7 @@ def main():
     )
     eval_parser.add_argument(
         '-o', '--output-format',
-        choices=['pretty', 'json'],
+        choices=['pretty', 'json', 'csv'],
         default='pretty',
         help='Output format (default: pretty)'
     )

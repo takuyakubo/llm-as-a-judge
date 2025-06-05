@@ -1,6 +1,8 @@
 import unittest
 from datetime import datetime
 import json
+import csv
+import io
 from src.criteria import Criteria, Criterion, Level
 from src.evaluator import Evaluator, EvaluationResult, CriterionScore
 
@@ -141,6 +143,91 @@ class TestEvaluator(unittest.TestCase):
         self.assertEqual(result_dict["model_used"], "gpt-4")
         self.assertEqual(len(result_dict["scores"]), 1)
         self.assertEqual(result_dict["scores"][0]["criterion_name"], "clarity")
+    
+    def test_evaluation_result_to_csv(self):
+        """Test EvaluationResult CSV export"""
+        now = datetime.now()
+        result = EvaluationResult(
+            document_id="test_doc.txt",
+            timestamp=now,
+            scores=[
+                CriterionScore(
+                    criterion_name="clarity",
+                    score=4,
+                    reasoning="Clear and well-structured",
+                    confidence=0.9
+                ),
+                CriterionScore(
+                    criterion_name="coherence",
+                    score=5,
+                    reasoning="Highly logical flow",
+                    confidence=0.95
+                )
+            ],
+            overall_score=4.5,
+            model_used="gpt-4"
+        )
+        
+        # Test with reasoning included
+        csv_output = result.to_csv(include_reasoning=True)
+        
+        # Parse CSV output
+        reader = csv.DictReader(io.StringIO(csv_output))
+        rows = list(reader)
+        
+        # Should have 2 rows (one per criterion)
+        self.assertEqual(len(rows), 2)
+        
+        # Check first row
+        row1 = rows[0]
+        self.assertEqual(row1['document_id'], 'test_doc.txt')
+        self.assertEqual(row1['model_used'], 'gpt-4')
+        self.assertEqual(row1['criterion_name'], 'clarity')
+        self.assertEqual(row1['score'], '4')
+        self.assertEqual(row1['confidence'], '0.9')
+        self.assertEqual(row1['reasoning'], 'Clear and well-structured')
+        self.assertEqual(row1['overall_score'], '4.50')
+        
+        # Check second row
+        row2 = rows[1]
+        self.assertEqual(row2['criterion_name'], 'coherence')
+        self.assertEqual(row2['score'], '5')
+        self.assertEqual(row2['confidence'], '0.95')
+        self.assertEqual(row2['reasoning'], 'Highly logical flow')
+        
+        # Test without reasoning
+        csv_output_no_reasoning = result.to_csv(include_reasoning=False)
+        reader_no_reasoning = csv.DictReader(io.StringIO(csv_output_no_reasoning))
+        rows_no_reasoning = list(reader_no_reasoning)
+        
+        # Check that reasoning column is not present
+        self.assertNotIn('reasoning', rows_no_reasoning[0])
+        
+    def test_evaluation_result_to_csv_with_empty_fields(self):
+        """Test CSV export with empty/None fields"""
+        result = EvaluationResult(
+            document_id=None,
+            timestamp=datetime.now(),
+            scores=[
+                CriterionScore(
+                    criterion_name="test",
+                    score=3,
+                    reasoning="",
+                    confidence=0.5
+                )
+            ],
+            overall_score=3.0,
+            model_used=None
+        )
+        
+        csv_output = result.to_csv()
+        reader = csv.DictReader(io.StringIO(csv_output))
+        row = list(reader)[0]
+        
+        # Check empty fields are handled properly
+        self.assertEqual(row['document_id'], '')
+        self.assertEqual(row['model_used'], '')
+        self.assertEqual(row['reasoning'], '')
 
 
 class TestIntegrationWithRubric(unittest.TestCase):
