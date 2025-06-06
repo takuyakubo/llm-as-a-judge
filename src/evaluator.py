@@ -1,9 +1,11 @@
-from typing import Dict, List, Optional, Callable, Union
+from typing import Dict, List, Optional, Callable, Union, Tuple
 from datetime import datetime
 import asyncio
 import csv
 import io
 from pydantic import BaseModel
+from pathlib import Path
+from tqdm import tqdm
 from .criteria import Criteria, Criterion
 from .llm_providers import LLMProvider, create_llm_provider, LLMConfig
 
@@ -283,3 +285,201 @@ class Evaluator:
             overall_score=3.0,
             model_used="mock"
         )
+    
+    def evaluate_batch(
+        self, 
+        documents: Union[List[str], Dict[str, str], List[Tuple[str, str]]], 
+        show_progress: bool = True,
+        max_concurrent: int = 5,
+        output_csv: Optional[str] = None,
+        include_reasoning: bool = True
+    ) -> List[EvaluationResult]:
+        """Evaluate multiple documents in batch
+        
+        Args:
+            documents: Can be:
+                - List of document strings
+                - Dict mapping document_id to document content
+                - List of (document_id, document_content) tuples
+            show_progress: Whether to show progress bar
+            max_concurrent: Maximum number of concurrent evaluations
+            output_csv: Optional path to save results as CSV
+            include_reasoning: Whether to include reasoning in CSV output
+            
+        Returns:
+            List of EvaluationResult objects
+        """
+        # Normalize input to list of (id, content) tuples
+        if isinstance(documents, dict):
+            doc_items = list(documents.items())
+        elif isinstance(documents, list) and documents:
+            if isinstance(documents[0], tuple):
+                doc_items = documents
+            else:
+                # List of strings - generate IDs
+                doc_items = [(f"doc_{i}", doc) for i, doc in enumerate(documents)]
+        else:
+            raise ValueError("Documents must be a list, dict, or list of tuples")
+        
+        # Run evaluations
+        if self.llm_provider and asyncio.iscoroutinefunction(self.llm_provider.generate):
+            # Use async batch processing
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If already in async context, use sync version
+                    results = self._evaluate_batch_sync(doc_items, show_progress)
+                else:
+                    # Run async version
+                    results = loop.run_until_complete(
+                        self._evaluate_batch_async(doc_items, show_progress, max_concurrent)
+                    )
+            except RuntimeError:
+                # Fallback to sync
+                results = self._evaluate_batch_sync(doc_items, show_progress)
+        else:
+            # Use sync version
+            results = self._evaluate_batch_sync(doc_items, show_progress)
+        
+        # Save to CSV if requested
+        if output_csv:
+            self._save_batch_results_csv(results, output_csv, include_reasoning)
+        
+        return results
+    
+    def _evaluate_batch_sync(
+        self, 
+        doc_items: List[Tuple[str, str]], 
+        show_progress: bool
+    ) -> List[EvaluationResult]:
+        """Synchronous batch evaluation"""
+        results = []
+        
+        # Use tqdm for progress bar if requested
+        iterator = tqdm(doc_items, desc="Evaluating documents") if show_progress else doc_items
+        
+        for doc_id, content in iterator:
+            result = self.evaluate_document(content, document_id=doc_id)
+            results.append(result)
+        
+        return results
+    
+    async def _evaluate_batch_async(
+        self, 
+        doc_items: List[Tuple[str, str]], 
+        show_progress: bool,
+        max_concurrent: int
+    ) -> List[EvaluationResult]:
+        """Asynchronous batch evaluation with concurrency control"""
+        semaphore = asyncio.Semaphore(max_concurrent)
+        
+        async def evaluate_with_semaphore(doc_id: str, content: str) -> EvaluationResult:
+            async with semaphore:
+                return await self.evaluate_document_async(content, document_id=doc_id)
+        
+        # Create all tasks
+        tasks = [
+            evaluate_with_semaphore(doc_id, content) 
+            for doc_id, content in doc_items
+        ]
+        
+        # Execute with progress bar
+        if show_progress:
+            results = []
+            for task in tqdm(
+                asyncio.as_completed(tasks), 
+                total=len(tasks), 
+                desc="Evaluating documents"
+            ):
+                result = await task
+                results.append(result)
+            # Sort results to maintain order
+            results.sort(key=lambda r: doc_items.index(
+                next((item for item in doc_items if item[0] == r.document_id), None)
+            ))
+        else:
+            results = await asyncio.gather(*tasks)
+        
+        return results
+    
+    def _save_batch_results_csv(
+        self, 
+        results: List[EvaluationResult], 
+        output_path: str,
+        include_reasoning: bool
+    ):
+        """Save batch evaluation results to CSV file"""
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            # Get headers from first result
+            if results:
+                headers = ['document_id', 'timestamp', 'model_used', 'criterion_name', 
+                          'score', 'confidence']
+                if include_reasoning:
+                    headers.append('reasoning')
+                headers.append('overall_score')
+                
+                writer = csv.DictWriter(f, fieldnames=headers)
+                writer.writeheader()
+                
+                # Write all results
+                for result in results:
+                    for score in result.scores:
+                        row = {
+                            'document_id': result.document_id or '',
+                            'timestamp': result.timestamp.isoformat(),
+                            'model_used': result.model_used or '',
+                            'criterion_name': score.criterion_name,
+                            'score': score.score,
+                            'confidence': score.confidence,
+                            'overall_score': f"{result.overall_score:.2f}"
+                        }
+                        if include_reasoning:
+                            row['reasoning'] = score.reasoning
+                        writer.writerow(row)
+    
+    def evaluate_directory(
+        self,
+        directory_path: str,
+        pattern: str = "*.txt",
+        recursive: bool = False,
+        **kwargs
+    ) -> List[EvaluationResult]:
+        """Evaluate all documents in a directory
+        
+        Args:
+            directory_path: Path to directory containing documents
+            pattern: Glob pattern for files to evaluate (default: "*.txt")
+            recursive: Whether to search recursively
+            **kwargs: Additional arguments passed to evaluate_batch
+            
+        Returns:
+            List of EvaluationResult objects
+        """
+        path = Path(directory_path)
+        if not path.exists() or not path.is_dir():
+            raise ValueError(f"Directory {directory_path} does not exist")
+        
+        # Find all matching files
+        if recursive:
+            files = list(path.rglob(pattern))
+        else:
+            files = list(path.glob(pattern))
+        
+        if not files:
+            raise ValueError(f"No files matching pattern '{pattern}' found in {directory_path}")
+        
+        # Read documents
+        documents = {}
+        for file_path in files:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    documents[str(file_path)] = content
+            except Exception as e:
+                print(f"Warning: Failed to read {file_path}: {e}")
+        
+        if not documents:
+            raise ValueError("No documents could be read successfully")
+        
+        # Evaluate batch
+        return self.evaluate_batch(documents, **kwargs)
